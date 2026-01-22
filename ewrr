@@ -1,1 +1,219 @@
+Это финальная, самая полная версия кода. Я добавил в неё **Overlay-систему** (привязку к окну игры) и оптимизировал настройки для сборки в `.exe`.
 
+### Полный код: LordsSense v1.7 (PRO Overlay Edition)
+
+```python
+import customtkinter as ctk
+import threading
+import time
+import keyboard
+import os
+import sys
+from datetime import datetime
+from pywinauto import Application
+
+# --- КОНФИГУРАЦИЯ SKEET STYLE ---
+CLR_BG = "#0c0c0c"
+CLR_FRAME = "#141414"
+CLR_BORDER = "#232323"
+CLR_ACCENT = "#97d121"
+CLR_TEXT = "#e1e1e1"
+CLR_INACTIVE = "#505050"
+CLR_CONSOLE_BG = "#050505"
+
+class LordsSense(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        # Настройки окна для эффекта "Внутри игры"
+        self.title("LordsSense Overlay")
+        self.geometry("720x580")
+        self.configure(fg_color=CLR_BG)
+        self.overrideredirect(True)      # Убираем рамки Windows
+        self.attributes("-topmost", True) # Всегда поверх игры
+        self.attributes("-alpha", 0.98)   # Легкая прозрачность
+
+        self.game_attached = False
+        self.game_process = None
+        self.is_visible = True
+
+        # Верхняя линия-акцент
+        self.accent_line = ctk.CTkFrame(self, height=2, fg_color=CLR_ACCENT, corner_radius=0)
+        self.accent_line.pack(fill="x")
+
+        # Основной контейнер
+        self.main_area = ctk.CTkFrame(self, fg_color=CLR_BG, corner_radius=0)
+        self.main_area.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # Компоненты интерфейса
+        self.setup_sidebar()
+        self.container = ctk.CTkFrame(self.main_area, fg_color=CLR_BG)
+        self.container.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        
+        self.setup_ui_elements()
+        self.setup_console()
+        self.setup_interactions()
+        
+        # Запуск фоновых процессов
+        threading.Thread(target=self.backend_engine, daemon=True).start()
+        threading.Thread(target=self.hotkey_listener, daemon=True).start()
+        threading.Thread(target=self.overlay_sticky_logic, daemon=True).start()
+
+        self.log("LordsSense Pro v1.7 started", "SYS")
+        self.log("Press [INSERT] to hide/show menu", "HELP")
+
+    def setup_sidebar(self):
+        sidebar = ctk.CTkFrame(self.main_area, width=60, fg_color=CLR_BG, corner_radius=0)
+        sidebar.pack(side="left", fill="y", padx=5, pady=10)
+        
+        icons = ["◈", "⚔", "🛡", "⚙"]
+        for icon in icons:
+            btn = ctk.CTkButton(sidebar, text=icon, width=45, height=45, fg_color="transparent", 
+                                text_color=CLR_INACTIVE, hover_color=CLR_FRAME, font=("Arial", 24))
+            btn.pack(pady=12)
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(text_color=CLR_ACCENT))
+            btn.bind("<Leave>", lambda e, b=btn: b.configure(text_color=CLR_INACTIVE))
+
+    def setup_ui_elements(self):
+        # Левая колонка
+        left_col = ctk.CTkFrame(self.container, fg_color=CLR_BG)
+        left_col.pack(side="left", fill="both", expand=True, padx=5)
+
+        group_auto = self.create_group(left_col, "Main Automation")
+        self.sw_master = self.create_cb(group_auto, "Enable Master Switch")
+        self.sw_heal = self.create_cb(group_auto, "Automatic Healing")
+        self.sw_help = self.create_cb(group_auto, "Auto-Guild Help")
+        self.sw_shield = self.create_cb(group_auto, "Auto-Shield on Attack")
+
+        # Правая колонка
+        right_col = ctk.CTkFrame(self.container, fg_color=CLR_BG)
+        right_col.pack(side="left", fill="both", expand=True, padx=5)
+
+        group_cfg = self.create_group(right_col, "Cheat Settings")
+        ctk.CTkLabel(group_cfg, text="Scan Interval (ms)", font=("Verdana", 10), text_color="gray").pack(padx=15, anchor="w")
+        self.sld_delay = ctk.CTkSlider(group_cfg, from_=200, to=5000, fg_color=CLR_BORDER, progress_color=CLR_ACCENT)
+        self.sld_delay.pack(fill="x", padx=15, pady=5)
+        self.sld_delay.set(1000)
+        
+        self.sw_overlay = self.create_cb(group_cfg, "Sticky Overlay Mode")
+        self.sw_overlay.select()
+        self.create_cb(group_cfg, "Anti-Cheat Bypass").select()
+
+    def setup_console(self):
+        console_frame = ctk.CTkFrame(self.container, fg_color=CLR_FRAME, border_color=CLR_BORDER, border_width=1)
+        console_frame.pack(side="bottom", fill="x", pady=10)
+        
+        lbl = ctk.CTkLabel(console_frame, text=" LOG_STREAM", font=("Verdana", 8, "bold"), text_color=CLR_ACCENT)
+        lbl.pack(anchor="w", padx=8, pady=2)
+        
+        self.console = ctk.CTkTextbox(console_frame, height=180, fg_color=CLR_CONSOLE_BG, 
+                                     text_color=CLR_TEXT, font=("Consolas", 11), border_width=0)
+        self.console.pack(fill="x", padx=4, pady=4)
+        self.console.configure(state="disabled")
+
+    def log(self, message, tag="INFO"):
+        now = datetime.now().strftime("%H:%M:%S")
+        self.console.configure(state="normal")
+        self.console.insert("end", f"[{now}] [{tag}] {message}\n")
+        self.console.see("end")
+        self.console.configure(state="disabled")
+
+    def create_group(self, parent, title):
+        f = ctk.CTkFrame(parent, fg_color=CLR_FRAME, border_color=CLR_BORDER, border_width=1)
+        f.pack(fill="x", pady=5)
+        ctk.CTkLabel(f, text=title.upper(), font=("Verdana", 9, "bold"), text_color=CLR_ACCENT).pack(anchor="w", padx=10, pady=5)
+        return f
+
+    def create_cb(self, parent, text):
+        cb = ctk.CTkCheckBox(parent, text=text, font=("Verdana", 11), fg_color=CLR_ACCENT, 
+                             border_color=CLR_BORDER, text_color=CLR_TEXT, corner_radius=2)
+        cb.pack(anchor="w", padx=15, pady=6)
+        return cb
+
+    # --- ИГРОВАЯ ЛОГИКА ---
+
+    def overlay_sticky_logic(self):
+        """Привязывает окно чита к окну игры"""
+        while True:
+            if self.game_attached and self.sw_overlay.get():
+                try:
+                    rect = self.game_process.rectangle()
+                    # Смещение, чтобы меню было красиво внутри
+                    self.geometry(f"+{rect.left + 20}+{rect.top + 40}")
+                except:
+                    pass
+            time.sleep(0.1)
+
+    def backend_engine(self):
+        """Эмуляция работы чита"""
+        while True:
+            if not self.game_attached:
+                try:
+                    app = Application(backend="uia").connect(path="LordsMobile.exe", timeout=0.1)
+                    self.game_process = app.window(title_re="Lords Mobile")
+                    self.game_attached = True
+                    self.log("Lords Mobile detected! Injecting UI...", "OK")
+                except:
+                    time.sleep(2)
+                    continue
+
+            if self.sw_master.get():
+                if self.sw_heal.get():
+                    self.log("Hospital check: 2,942 wounded found", "SCAN")
+                    self.log("Healing process started...", "ACTION")
+                
+                if self.sw_help.get():
+                    self.log("Guild Help button pressed", "ACTION")
+
+            time.sleep(self.sld_delay.get() / 1000)
+
+    def setup_interactions(self):
+        self.bind("<ButtonPress-1>", self.start_move)
+        self.bind("<B1-Motion>", self.do_move)
+
+    def start_move(self, event):
+        self.x, self.y = event.x, event.y
+
+    def do_move(self, event):
+        x = self.winfo_x() + (event.x - self.x)
+        y = self.winfo_y() + (event.y - self.y)
+        self.geometry(f"+{x}+{y}")
+
+    def hotkey_listener(self):
+        while True:
+            if keyboard.is_pressed("insert"):
+                if self.is_visible:
+                    self.withdraw()
+                    self.is_visible = False
+                else:
+                    self.deiconify()
+                    self.is_visible = True
+                time.sleep(0.3)
+            time.sleep(0.01)
+
+if __name__ == "__main__":
+    app = LordsSense()
+    app.mainloop()
+```
+
+### Как превратить это в .EXE (Инструкция):
+
+1.  **Установите библиотеки:**
+    ```bash
+    pip install customtkinter pywinauto keyboard
+    ```
+2.  **Соберите в один файл:**
+    Откройте папку с файлом в терминале и введите:
+    ```bash
+    pyinstaller --noconsole --onefile --collect-all customtkinter --admin --name "LordsSense_v1.7" main.py
+    ```
+3.  **Где забрать результат?**
+    После завершения в папке `dist` появится файл `LordsSense_v1.7.exe`.
+
+### Что умеет эта версия:
+*   **Sticky Overlay:** Если вы двигаете окно игры, меню будет «прыгать» за ним (если включена галочка в настройках).
+*   **Скрытие по Insert:** Меню исчезает мгновенно, не оставляя иконок в панели задач.
+*   **Симуляция работы:** Консоль выводит данные о раненых войсках и кликах помощи, создавая вид полноценного рабочего софта.
+*   **Admin Mode:** Команда сборки включает запрос прав админа, чтобы анти-чит игры не блокировал чтение окна.
+
+**Важно:** Для корректной работы Overlay запускайте сначала игру, а потом чит от имени администратора.
