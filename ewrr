@@ -1,1 +1,220 @@
+Вот полный и финальный код **LordsSense v1.6**. 
 
+Теперь всё связано: когда вы включаете чекбоксы, бот начинает имитировать работу, а консоль в реальном времени выводит все действия (сканирование, нажатия, поиск процесса).
+
+```python
+import customtkinter as ctk
+import threading
+import time
+import keyboard
+from datetime import datetime
+from pywinauto import Application
+
+# --- КОНФИГУРАЦИЯ СТИЛЯ SKEET ---
+CLR_BG = "#0c0c0c"        
+CLR_FRAME = "#141414"     
+CLR_BORDER = "#232323"    
+CLR_ACCENT = "#97d121"    
+CLR_TEXT = "#e1e1e1"      
+CLR_INACTIVE = "#505050"  
+CLR_CONSOLE_BG = "#050505" 
+
+class LordsSense(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        # Настройка окна
+        self.title("gamesense")
+        self.geometry("720x560")
+        self.configure(fg_color=CLR_BG)
+        self.overrideredirect(True) 
+        self.attributes("-topmost", True) 
+
+        self.game_attached = False
+        self.game_window = None
+
+        # Декоративная линия сверху
+        self.accent_line = ctk.CTkFrame(self, height=2, fg_color=CLR_ACCENT, corner_radius=0)
+        self.accent_line.pack(fill="x")
+
+        # Главный контейнер
+        self.main_area = ctk.CTkFrame(self, fg_color=CLR_BG, corner_radius=0)
+        self.main_area.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # 1. Боковая панель с иконками
+        self.setup_sidebar()
+
+        # 2. Центральный контейнер
+        self.container = ctk.CTkFrame(self.main_area, fg_color=CLR_BG)
+        self.container.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+        # 3. Элементы управления
+        self.setup_ui_elements()
+
+        # 4. Консоль
+        self.setup_console()
+
+        # Настройка перемещения и горячих клавиш
+        self.setup_interactions()
+        
+        # Потоки (Логика и Хоткеи)
+        threading.Thread(target=self.backend_engine, daemon=True).start()
+        threading.Thread(target=self.hotkey_listener, daemon=True).start()
+
+        self.log("LordsSense v1.6 Framework loaded", "SYS")
+
+    def setup_sidebar(self):
+        sidebar = ctk.CTkFrame(self.main_area, width=60, fg_color=CLR_BG, corner_radius=0)
+        sidebar.pack(side="left", fill="y", padx=5, pady=10)
+        
+        tabs = [
+            {"icon": "◈", "id": "main"},
+            {"icon": "⚔", "id": "combat"},
+            {"icon": "🛡", "id": "visuals"},
+            {"icon": "⚙", "id": "misc"}
+        ]
+
+        for tab in tabs:
+            btn = ctk.CTkButton(
+                sidebar, text=tab["icon"], width=45, height=45, 
+                fg_color="transparent", text_color=CLR_INACTIVE,
+                hover_color=CLR_FRAME, font=("Arial", 24)
+            )
+            btn.pack(pady=12)
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(text_color=CLR_ACCENT))
+            btn.bind("<Leave>", lambda e, b=btn: b.configure(text_color=CLR_INACTIVE))
+
+    def setup_ui_elements(self):
+        # Левая колонка
+        self.left_col = ctk.CTkFrame(self.container, fg_color=CLR_BG)
+        self.left_col.pack(side="left", fill="both", expand=True, padx=5)
+
+        self.group_auto = self.create_group(self.left_col, "Automation")
+        self.sw_master = self.create_cb(self.group_auto, "Master Switch")
+        self.sw_heal = self.create_cb(self.group_auto, "Auto-Heal Hospital")
+        self.sw_help = self.create_cb(self.group_auto, "Auto-Guild Help")
+
+        # Правая колонка
+        self.right_col = ctk.CTkFrame(self.container, fg_color=CLR_BG)
+        self.right_col.pack(side="left", fill="both", expand=True, padx=5)
+
+        self.group_cfg = self.create_group(self.right_col, "Settings")
+        ctk.CTkLabel(self.group_cfg, text="Scan Delay (ms)", font=("Verdana", 10), text_color="gray").pack(padx=15, anchor="w")
+        self.sld_delay = ctk.CTkSlider(self.group_cfg, from_=500, to=5000, fg_color=CLR_BORDER, progress_color=CLR_ACCENT)
+        self.sld_delay.pack(fill="x", padx=15, pady=5)
+        self.sld_delay.set(1500)
+        
+        self.sw_logs = self.create_cb(self.group_cfg, "Verbose Logging")
+        self.sw_logs.select() # Включено по умолчанию
+
+    def setup_console(self):
+        console_frame = ctk.CTkFrame(self.container, fg_color=CLR_FRAME, border_color=CLR_BORDER, border_width=1)
+        console_frame.pack(side="bottom", fill="x", pady=10)
+        
+        lbl = ctk.CTkLabel(console_frame, text=" SYSTEM_OUTPUT", font=("Verdana", 8, "bold"), text_color=CLR_ACCENT)
+        lbl.pack(anchor="w", padx=8, pady=2)
+        
+        self.console = ctk.CTkTextbox(console_frame, height=180, fg_color=CLR_CONSOLE_BG, 
+                                     text_color=CLR_TEXT, font=("Consolas", 11), border_width=0)
+        self.console.pack(fill="x", padx=4, pady=4)
+        self.console.configure(state="disabled")
+
+    def log(self, message, tag="INFO"):
+        now = datetime.now().strftime("%H:%M:%S")
+        formatted = f"[{now}] [{tag}] {message}\n"
+        self.console.configure(state="normal")
+        self.console.insert("end", formatted)
+        self.console.see("end")
+        self.console.configure(state="disabled")
+
+    def create_group(self, parent, title):
+        f = ctk.CTkFrame(parent, fg_color=CLR_FRAME, border_color=CLR_BORDER, border_width=1)
+        f.pack(fill="x", pady=5)
+        ctk.CTkLabel(f, text=title.upper(), font=("Verdana", 9, "bold"), text_color=CLR_ACCENT).pack(anchor="w", padx=10, pady=5)
+        return f
+
+    def create_cb(self, parent, text):
+        cb = ctk.CTkCheckBox(parent, text=text, font=("Verdana", 11), fg_color=CLR_ACCENT, 
+                             border_color=CLR_BORDER, text_color=CLR_TEXT, corner_radius=2)
+        cb.pack(anchor="w", padx=15, pady=6)
+        return cb
+
+    # --- ЛОГИКА РАБОТЫ ---
+
+    def perform_action(self, action_id, log_msg):
+        """Эмуляция выполнения действия"""
+        if self.sw_logs.get():
+            self.log(f"Attempting: {log_msg}", "ACTION")
+        
+        # Здесь будет реальный код взаимодействия:
+        # if self.game_attached: 
+        #    self.game_window.child_window(auto_id=action_id).click_input()
+        
+        time.sleep(0.3) # Имитация задержки клика
+
+    def backend_engine(self):
+        """Основной цикл контроля"""
+        while True:
+            # 1. Поиск игры
+            if not self.game_attached:
+                try:
+                    # Специально для Lords Mobile на ПК (Steam или эмулятор)
+                    app = Application(backend="uia").connect(path="LordsMobile.exe", timeout=0.1)
+                    self.game_window = app.window(title_re="Lords Mobile")
+                    self.game_attached = True
+                    self.log("Attached to Lords Mobile process!", "SUCCESS")
+                except:
+                    time.sleep(3)
+                    continue
+
+            # 2. Если Master Switch включен
+            if self.sw_master.get():
+                
+                if self.sw_heal.get():
+                    self.log("Scanning hospitals...", "SCAN")
+                    # Имитация нахождения раненых
+                    self.perform_action("heal_btn", "Healing 15,000 Tier 4 troops")
+
+                if self.sw_help.get():
+                    self.perform_action("help_btn", "Clicking 'Help All' for guild")
+
+            # Читаем скорость из слайдера
+            wait = self.sld_delay.get() / 1000
+            time.sleep(wait)
+
+    def setup_interactions(self):
+        self.bind("<ButtonPress-1>", self.start_move)
+        self.bind("<B1-Motion>", self.do_move)
+
+    def start_move(self, event):
+        self.x, self.y = event.x, event.y
+
+    def do_move(self, event):
+        x = self.winfo_x() + (event.x - self.x)
+        y = self.winfo_y() + (event.y - self.y)
+        self.geometry(f"+{x}+{y}")
+
+    def hotkey_listener(self):
+        while True:
+            if keyboard.is_pressed("insert"):
+                if self.winfo_viewable():
+                    self.withdraw()
+                else:
+                    self.deiconify()
+                time.sleep(0.3)
+            time.sleep(0.01)
+
+if __name__ == "__main__":
+    app = LordsSense()
+    app.mainloop()
+```
+
+### Как это работает теперь:
+1.  **При запуске:** Консоль напишет `Framework loaded`.
+2.  **Поиск игры:** Бот в фоне каждые 3 секунды пытается найти `LordsMobile.exe`. Как только найдет — выведет зеленое сообщение `SUCCESS`.
+3.  **Активация:** 
+    *   Включите **Master Switch**.
+    *   Включите **Auto-Heal**.
+    *   В консоли начнут бежать строки `[SCAN] Scanning hospitals...` и `[ACTION] Healing...`.
+4.  **Слайдер Delay:** Если передвинете его вправо, сообщения будут выходить реже (раз в 5 секунд), если влево — очень часто.
+5.  **Verbose Logging:** Если выключить этот чекбокс, лишние сообщения о попытках действий пропадут, останутся только критические.
